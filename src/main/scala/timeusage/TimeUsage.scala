@@ -29,11 +29,13 @@ object TimeUsage {
   }
 
   def timeUsageByLifePeriod(): Unit = {
-    val (columns, initDf) = read("/timeusage/atussum.csv")
+    val (columns, initDf) = read("/atussum.csv")
     val (primaryNeedsColumns, workColumns, otherColumns) = classifiedColumns(columns)
     val summaryDf = timeUsageSummary(primaryNeedsColumns, workColumns, otherColumns, initDf)
     val finalDf = timeUsageGrouped(summaryDf)
     finalDf.show()
+
+    timeUsageGroupedSql(summaryDf).show()
   }
 
   /** @return The read DataFrame along with its column names. */
@@ -57,8 +59,10 @@ object TimeUsage {
   }
 
   /** @return The filesystem path of the given resource */
-  def fsPath(resource: String): String =
-    Paths.get(getClass.getResource(resource).toURI).toString
+  def fsPath(resource: String): String = {
+    val path = Paths.get(getClass.getResource(resource).toURI).toString
+    path
+  }
 
   /** @return The schema of the DataFrame, assuming that the first given column has type String and all the others
     *         have type Double. None of the fields are nullable.
@@ -107,6 +111,8 @@ object TimeUsage {
       case c if c startsWith("t15") => tuple._3.append(column)
       case c if c startsWith("t16") => tuple._3.append(column)
       case c if c startsWith("t18") => tuple._3.append(column)
+        //for all others do nothing
+      case _ => {}
     }
     if (tail.isEmpty) {
       (tuple._1.toList, tuple._2.toList, tuple._3.toList)
@@ -170,15 +176,31 @@ object TimeUsage {
     otherColumns: List[Column],
     df: DataFrame
   ): DataFrame = {
-    val workingStatusProjection: Column = ???
-    val sexProjection: Column = ???
-    val ageProjection: Column = ???
+    val workingStatusProjection: Column = {
+      when((col("telfs") >= lit(1)) && (col("telfs") < lit(3)), lit("working")).otherwise(lit("not working")).as("working")
+    }
+    val sexProjection: Column = {
+      when(col("tesex") === lit(1), lit("male")).otherwise(lit("female")).as("sex")
+    }
+    val ageProjection: Column = {
+      when((col("teage") >= lit(15)) && (col("teage") <= lit(22)), lit("young")).otherwise(
+        when((col("teage") >= lit(23)) && (col("teage") <= 55) , lit("active")).otherwise(lit("elder"))
+      ).as("age")
+        //.otherwise(lit("elder")).as("age")
+    }
 
-    val primaryNeedsProjection: Column = ???
-    val workProjection: Column = ???
-    val otherProjection: Column = ???
+    val primaryNeedsProjection: Column = {
+      primaryNeedsColumns.reduce(_+_)/lit(60.0)
+    }
+    val workProjection: Column = {
+      workColumns.reduce(_+_)/lit(60.0)
+    }
+    val otherProjection: Column = {
+      otherColumns.reduce(_+_)/lit(60.0)
+    }
+
     df
-      .select(workingStatusProjection, sexProjection, ageProjection, primaryNeedsProjection, workProjection, otherProjection)
+      .select(workingStatusProjection, sexProjection, ageProjection, primaryNeedsProjection as("primaryNeeds"), workProjection as("work"), otherProjection as("other"))
       .where($"telfs" <= 4) // Discard people who are not in labor force
   }
 
@@ -200,7 +222,9 @@ object TimeUsage {
     * Finally, the resulting DataFrame should be sorted by working status, sex and age.
     */
   def timeUsageGrouped(summed: DataFrame): DataFrame = {
-    ???
+    val result: DataFrame = summed.groupBy(col("sex"), col("age"), col("working"))
+    .agg(round(avg(col("primaryNeeds")), 1) as "primaryNeeds", round(avg(col("work")), 1) as "work", round(avg(col("other")), 1) as "other")
+    result.sort(col("working"), col("sex"), col("age"))
   }
 
   /**
@@ -216,8 +240,12 @@ object TimeUsage {
   /** @return SQL query equivalent to the transformation implemented in `timeUsageGrouped`
     * @param viewName Name of the SQL view to use
     */
-  def timeUsageGroupedSqlQuery(viewName: String): String =
-    ???
+  def timeUsageGroupedSqlQuery(viewName: String): String = {
+    s"""select sex, age, working, round(avg(primaryNeeds),1) as primaryNeeds, round(avg(work), 1) as work, round(avg(other), 1) as other
+       | from $viewName group by sex, age, working
+       | sort by working, sex, age""".stripMargin
+  }
+
 
   /**
     * @return A `Dataset[TimeUsageRow]` from the “untyped” `DataFrame`
@@ -226,8 +254,10 @@ object TimeUsage {
     * Hint: you should use the `getAs` method of `Row` to look up columns and
     * cast them at the same time.
     */
-  def timeUsageSummaryTyped(timeUsageSummaryDf: DataFrame): Dataset[TimeUsageRow] =
+  def timeUsageSummaryTyped(timeUsageSummaryDf: DataFrame): Dataset[TimeUsageRow] = {
     ???
+  }
+
 
   /**
     * @return Same as `timeUsageGrouped`, but using the typed API when possible
